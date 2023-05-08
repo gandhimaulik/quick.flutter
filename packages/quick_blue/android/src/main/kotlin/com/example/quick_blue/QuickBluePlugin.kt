@@ -44,6 +44,7 @@ class QuickBluePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
   private lateinit var messageConnector: BasicMessageChannel<Any>
   private val lock = ReentrantLock()
   private val writeCondition = lock.newCondition()
+  private val readCondition = lock.newCondition()
   private val notificationCondition = lock.newCondition()
 
 
@@ -165,17 +166,25 @@ class QuickBluePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
         }
       }
       "readValue" -> {
-        val deviceId = call.argument<String>("deviceId")!!
-        val service = call.argument<String>("service")!!
-        val characteristic = call.argument<String>("characteristic")!!
-        val gatt = knownGatts.find { it.device.address == deviceId }
-          ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
-        val c = gatt.getCharacteristic(service, characteristic)
-          ?: return result.error("IllegalArgument", "Unknown characteristic: $characteristic", null)
-        if (gatt.readCharacteristic(c))
-          result.success(null)
-        else
-          result.error("Characteristic unavailable", null, null)
+        lock.withLock<Unit> {
+          val deviceId = call.argument<String>("deviceId")!!
+          val service = call.argument<String>("service")!!
+          val characteristic = call.argument<String>("characteristic")!!
+          val gatt = knownGatts.find { it.device.address == deviceId }
+            ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          val c = gatt.getCharacteristic(service, characteristic)
+            ?: return result.error(
+              "IllegalArgument",
+              "Unknown characteristic: $characteristic",
+              null
+            )
+          if (gatt.readCharacteristic(c)) {
+            readCondition.await()
+            result.success(null)
+          } else {
+            result.error("Characteristic unavailable", null, null)
+          }
+        }
       }
       "writeValue" -> {
         lock.withLock<Unit> {
@@ -362,6 +371,9 @@ class QuickBluePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
           )
         )
       )
+      lock.withLock {
+        readCondition.signal()
+      }
     }
 
     override fun onCharacteristicWrite(
