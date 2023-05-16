@@ -46,6 +46,7 @@ class QuickBluePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
   private val writeCondition = lock.newCondition()
   private val readCondition = lock.newCondition()
   private val notificationCondition = lock.newCondition()
+  private val mtuCondition = lock.newCondition()
 
 
   override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
@@ -207,12 +208,15 @@ class QuickBluePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
         }
       }
       "requestMtu" -> {
-        val deviceId = call.argument<String>("deviceId")!!
-        val expectedMtu = call.argument<Int>("expectedMtu")!!
-        val gatt = knownGatts.find { it.device.address == deviceId }
-          ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
-        gatt.requestMtu(expectedMtu)
-        result.success(null)
+        lock.withLock<Unit> {
+          val deviceId = call.argument<String>("deviceId")!!
+          val expectedMtu = call.argument<Int>("expectedMtu")!!
+          val gatt = knownGatts.find { it.device.address == deviceId }
+            ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          gatt.requestMtu(expectedMtu)
+          mtuCondition.await()
+          result.success(null)
+        }
       }
       else -> {
         result.notImplemented()
@@ -350,6 +354,9 @@ class QuickBluePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
             "mtuConfig" to mtu
           )
         )
+        lock.withLock {
+          mtuCondition.signal()
+        }
       }
     }
 
